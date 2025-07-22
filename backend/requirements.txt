@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+openai
+faiss-cpu
+pdfplumber
+python-multipart
+sqlalchemy
+psycopg2-binary
+pyjwt
+bcrypt
+python-jose[cryptography]
+google-cloud-secret-manager
+google-cloud-logging
+google-cloud-monitoring
+requests
