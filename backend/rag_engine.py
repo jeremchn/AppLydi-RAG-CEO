@@ -235,19 +235,20 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     
     return dot_product / (norm_vec1 * norm_vec2)
 
-def process_document_for_user(filename: str, content: bytes, user_id: int, db: Session) -> int:
-    """Process and store document for specific user"""
+def process_document_for_user(filename: str, content: bytes, user_id: int, db: Session, agent_id: int = None) -> int:
+    """Process and store document for specific user and optionally for a specific agent"""
     import tempfile
     import os
     
     try:
-        logger.info(f"Starting to process document: {filename} for user {user_id}")
+        logger.info(f"Starting to process document: {filename} for user {user_id}, agent {agent_id}")
         
         # Save document to database first
         document = Document(
             filename=filename,
             content=content.decode('utf-8') if filename.endswith('.txt') else str(content),
-            user_id=user_id
+            user_id=user_id,
+            agent_id=agent_id
         )
         db.add(document)
         db.commit()

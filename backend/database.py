@@ -45,8 +45,22 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relation avec les documents
+    # Relations avec les documents et les agents
     documents = relationship("Document", back_populates="owner", cascade="all, delete-orphan")
+    agents = relationship("Agent", back_populates="owner", cascade="all, delete-orphan")
+
+class Agent(Base):
+    __tablename__ = "agents"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    type = Column(String(50), nullable=False)  # 'sales', 'marketing', 'hr', 'purchase'
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relations
+    owner = relationship("User", back_populates="agents")
+    documents = relationship("Document", back_populates="agent", cascade="all, delete-orphan")
 
 class Document(Base):
     __tablename__ = "documents"
@@ -55,10 +69,12 @@ class Document(Base):
     filename = Column(String(255), nullable=False)
     content = Column(Text)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True)  # Documents peuvent être liés à un agent spécifique
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relation avec l'utilisateur
+    # Relations
     owner = relationship("User", back_populates="documents")
+    agent = relationship("Agent", back_populates="documents")
     
     # Relation avec les chunks
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")

@@ -32,7 +32,7 @@ class Config:
                 "region": os.getenv("GOOGLE_CLOUD_REGION", "europe-west1")
             },
             "app": {
-                "title": "AppLydi API",
+                "title": "TAIC Companion API",
                 "version": "1.0.0",
                 "allowed_origins": os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
                 "max_file_size": int(os.getenv("MAX_FILE_SIZE", "10485760")),  # 10MB

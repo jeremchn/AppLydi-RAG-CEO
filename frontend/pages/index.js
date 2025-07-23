@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
-import { Upload, Send, LogOut, FileText, MessageCircle, Plus, Trash2, Check } from "lucide-react";
+import { Upload, Send, LogOut, FileText, MessageCircle, Plus, Trash2, Check, ArrowLeft, Bot } from "lucide-react";
 
 // Auto-detect API URL based on environment
 const getApiUrl = () => {
@@ -29,6 +29,8 @@ export default function Dashboard() {
   const [documents, setDocuments] = useState([]);
   const [selectedDocuments, setSelectedDocuments] = useState(new Set());
   const [loadingDocuments, setLoadingDocuments] = useState(false);
+  const [currentAgent, setCurrentAgent] = useState(null);
+  const [agentId, setAgentId] = useState(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -37,9 +39,52 @@ export default function Dashboard() {
       router.push("/login");
     } else {
       setToken(savedToken);
-      loadDocuments(savedToken);
+      
+      // Check if we have an agentId in URL
+      const { agentId: urlAgentId } = router.query;
+      if (urlAgentId) {
+        setAgentId(urlAgentId);
+        loadAgentData(urlAgentId, savedToken);
+      } else {
+        // No agent specified, redirect to agents page
+        router.push("/agents");
+      }
     }
-  }, [router]);
+  }, [router, router.query]);
+
+  const loadAgentData = async (agentId, authToken) => {
+    setLoadingDocuments(true);
+    try {
+      // Load agent info first
+      const agentResponse = await axios.get(`${API_URL}/agents`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      
+      const agent = agentResponse.data.agents?.find(a => a.id.toString() === agentId.toString());
+      if (!agent) {
+        toast.error("Agent non trouvé");
+        router.push("/agents");
+        return;
+      }
+      
+      setCurrentAgent(agent);
+      
+      // Load documents for this specific agent
+      const docsResponse = await axios.get(`${API_URL}/user/documents?agent_id=${agentId}`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      
+      setDocuments(docsResponse.data.documents || []);
+      // Select all agent's documents by default
+      setSelectedDocuments(new Set((docsResponse.data.documents || []).map(doc => doc.id)));
+      
+    } catch (error) {
+      console.error("Error loading agent data:", error);
+      toast.error("Erreur lors du chargement de l'agent");
+    } finally {
+      setLoadingDocuments(false);
+    }
+  };
 
   const loadDocuments = async (authToken) => {
     setLoadingDocuments(true);
@@ -94,16 +139,40 @@ export default function Dashboard() {
     const file = event.target.files[0];
     if (!file) return;
     setUploadLoading(true);
-    const formData = new FormData();
-    formData.append("file", file);
+    
     try {
-      const response = await axios.post(`${API_URL}/upload`, formData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      let response;
+      
+      if (currentAgent) {
+        // Upload for specific agent
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("agent_id", currentAgent.id.toString());
+        
+        response = await axios.post(`${API_URL}/upload-agent`, formData, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        
+        // Reload documents for current agent
+        loadAgentData(currentAgent.id, token);
+      } else {
+        // Upload without agent (general upload)
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        response = await axios.post(`${API_URL}/upload`, formData, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        
+        // Reload all documents
+        loadDocuments(token);
+      }
+      
       toast.success(`Document "${file.name}" ajouté avec succès !`);
-      loadDocuments(token); // Reload documents
       event.target.value = ""; // Reset file input
     } catch (error) {
       console.error("Upload error:", error);
@@ -156,10 +225,19 @@ export default function Dashboard() {
         {/* Header */}
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-800 flex items-center">
-              <FileText className="w-6 h-6 mr-2 text-blue-600" />
-              Sources
-            </h2>
+            <div className="flex items-center">
+              <button
+                onClick={() => router.push('/agents')}
+                className="mr-3 p-1 text-gray-500 hover:text-blue-600 transition-colors"
+                title="Retour aux agents"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <h2 className="text-xl font-bold text-gray-800 flex items-center">
+                <FileText className="w-6 h-6 mr-2 text-blue-600" />
+                Sources
+              </h2>
+            </div>
             <button
               onClick={logout}
               className="p-2 text-gray-500 hover:text-red-600 transition-colors"
@@ -168,6 +246,25 @@ export default function Dashboard() {
               <LogOut className="w-5 h-5" />
             </button>
           </div>
+          
+          {/* Agent Info */}
+          {currentAgent && (
+            <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center">
+                <Bot className={`w-5 h-5 mr-2 ${
+                  currentAgent.agent_type === 'sales' ? 'text-green-600' :
+                  currentAgent.agent_type === 'marketing' ? 'text-purple-600' :
+                  currentAgent.agent_type === 'hr' ? 'text-blue-600' :
+                  'text-orange-600'
+                }`} />
+                <div>
+                  <p className="font-medium text-gray-800">{currentAgent.name}</p>
+                  <p className="text-sm text-gray-600 capitalize">{currentAgent.agent_type}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          
           {/* Add Document Button */}
           <label className="flex items-center justify-center w-full p-3 border-2 border-dashed border-blue-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
             <input
@@ -250,6 +347,23 @@ export default function Dashboard() {
       </div>
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
+        {/* Chat Header */}
+        <div className="border-b border-gray-200 p-4 bg-white">
+          {currentAgent && (
+            <div className="flex items-center">
+              <Bot className={`w-6 h-6 mr-3 ${
+                currentAgent.agent_type === 'sales' ? 'text-green-600' :
+                currentAgent.agent_type === 'marketing' ? 'text-purple-600' :
+                currentAgent.agent_type === 'hr' ? 'text-blue-600' :
+                'text-orange-600'
+              }`} />
+              <div>
+                <h1 className="text-xl font-bold text-gray-800">{currentAgent.name}</h1>
+                <p className="text-sm text-gray-600 capitalize">Agent {currentAgent.agent_type}</p>
+              </div>
+            </div>
+          )}
+        </div>
         {/* Input Section */}
         <div className="border-b border-gray-200 p-6">
           <div className="flex space-x-4">
@@ -290,7 +404,7 @@ export default function Dashboard() {
             /* Welcome Message */
             <div className="text-center text-gray-500 py-12">
               <MessageCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
-              <h3 className="text-xl font-semibold mb-2">Bienvenue dans AppLydi</h3>
+              <h3 className="text-xl font-semibold mb-2">Bienvenue dans TAIC Companion</h3>
               <p className="mb-4">
                 {documents.length === 0
                   ? "Ajoutez des documents et posez vos questions"

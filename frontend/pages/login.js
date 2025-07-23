@@ -53,7 +53,7 @@ export default function Login() {
       if (isLogin) {
         localStorage.setItem("token", response.data.access_token);
         toast.success("Connexion réussie !");
-        router.push("/");
+        router.push("/agents");
       } else {
         toast.success("Inscription réussie ! Vous pouvez maintenant vous connecter.");
         setIsLogin(true);
@@ -95,7 +95,7 @@ export default function Login() {
           {isLogin ? "Connexion" : "Inscription"}
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
-          AppLydi Assistant
+          TAIC Companion
         </p>
       </div>
 

@@ -1,8 +1,8 @@
-# AppLydi - Chatbot IA Personnalisé
+# TAIC Companion - Chatbot IA Personnalisé
 
 ## 🎯 Vue d'ensemble
 
-AppLydi est une plateforme SaaS permettant aux entreprises de créer des chatbots IA personnalisés basés sur leurs propres documents. Chaque client peut télécharger ses documents et obtenir des réponses précises basées sur son contenu spécifique.
+TAIC Companion est une plateforme SaaS permettant aux entreprises de créer des chatbots IA personnalisés basés sur leurs propres documents. Chaque client peut télécharger ses documents et obtenir des réponses précises basées sur son contenu spécifique.
 
 ## 🚀 Fonctionnalités
 

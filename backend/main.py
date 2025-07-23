@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 
 from auth import create_access_token, verify_token, hash_password, verify_password
-from database import get_db, init_db, User, Document
+from database import get_db, init_db, User, Document, Agent, Base, engine
 from rag_engine import get_answer, process_document_for_user
 from utils import logger, event_tracker
 
@@ -23,7 +23,7 @@ if os.getenv("GOOGLE_CLOUD_PROJECT"):
     except ImportError:
         pass
 
-app = FastAPI(title="AppLydi API", version="1.0.0")
+app = FastAPI(title="TAIC Companion API", version="1.0.0")
 
 # CORS configuration
 app.add_middleware(
@@ -34,27 +34,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database
+# Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup"""
+    """Initialize database and create tables on startup"""
     try:
+        logger.info("Initializing database...")
         init_db()
-        logger.info("Database initialized successfully")
+        logger.info("Creating database tables...")
+        Base.metadata.create_all(bind=engine)
+        
+        # Run migration to add agent_id column if it doesn't exist
+        logger.info("Running database migrations...")
+        await run_migrations()
+        
+        logger.info("Database initialization completed successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
-        raise e
+        # Don't raise exception to allow the app to start, but log the error
+
+async def run_migrations():
+    """Run database migrations"""
+    try:
+        from sqlalchemy import text
+        
+        with engine.connect() as conn:
+            # Check if agent_id column exists in documents table
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'documents' AND column_name = 'agent_id'
+            """))
+            
+            if not result.fetchone():
+                logger.info("Adding agent_id column to documents table...")
+                conn.execute(text("""
+                    ALTER TABLE documents 
+                    ADD COLUMN agent_id INTEGER REFERENCES agents(id)
+                """))
+                conn.commit()
+                logger.info("agent_id column added successfully")
+            else:
+                logger.info("agent_id column already exists")
+                
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        # Don't raise exception to allow the app to continue
 
 # Health check endpoints
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "AppLydi API is running", "status": "ok"}
+    return {"message": "TAIC Companion API is running", "status": "ok"}
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "AppLydi API"}
+    return {"status": "healthy", "service": "TAIC Companion API"}
 
 # Pydantic models
 class UserCreate(BaseModel):
@@ -69,6 +105,21 @@ class UserLogin(BaseModel):
 class QuestionRequest(BaseModel):
     question: str
     selected_documents: list[int] = []  # List of document IDs to use
+    agent_type: str = None  # Optional agent type for specialized prompts
+
+class AgentCreate(BaseModel):
+    name: str
+    type: str  # 'sales', 'marketing', 'hr', 'purchase'
+
+class AgentResponse(BaseModel):
+    id: int
+    name: str
+    type: str
+    user_id: int
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
 
 # Routes
 @app.post("/register")
@@ -138,7 +189,13 @@ async def ask_question(
         logger.info(f"Selected documents: {request.selected_documents}")
         
         # Get answer from RAG engine
-        answer = get_answer(request.question, int(user_id), db, selected_doc_ids=request.selected_documents)
+        answer = get_answer(
+            request.question, 
+            int(user_id), 
+            db, 
+            selected_doc_ids=request.selected_documents,
+            agent_type=request.agent_type
+        )
         
         response_time = time.time() - start_time
         logger.info(f"Question answered for user {user_id} in {response_time:.2f}s")
@@ -157,7 +214,7 @@ async def upload_file(
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db)
 ):
-    """Upload and process document"""
+    """Upload and process document for a specific agent"""
     try:
         # Check file size (10MB limit)
         if file.size > 10 * 1024 * 1024:
@@ -169,12 +226,59 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="File type not supported")
         
         content = await file.read()
-        doc_id = process_document_for_user(file.filename, content, int(user_id), db)
+        
+        # Process document (agent_id will be None if not provided)
+        doc_id = process_document_for_user(file.filename, content, int(user_id), db, agent_id=None)
         
         logger.info(f"Document uploaded for user {user_id}: {file.filename}")
         event_tracker.track_document_upload(int(user_id), file.filename, len(content))
         
         return {"filename": file.filename, "document_id": doc_id, "status": "uploaded"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading document: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/upload-agent")
+async def upload_file_for_agent(
+    request: Request,
+    file: UploadFile = File(...),
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Upload and process document for a specific agent"""
+    try:
+        # Get agent_id from form data
+        form = await request.form()
+        agent_id = form.get("agent_id")
+        
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        
+        agent_id = int(agent_id)
+        # Check file size (10MB limit)
+        if file.size > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+        
+        # Check file type
+        allowed_types = ['.pdf', '.txt', '.docx']
+        if not any(file.filename.lower().endswith(ext) for ext in allowed_types):
+            raise HTTPException(status_code=400, detail="File type not supported")
+        
+        # Verify agent belongs to the user
+        agent = db.query(Agent).filter(Agent.id == agent_id, Agent.user_id == int(user_id)).first()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found or doesn't belong to user")
+        
+        content = await file.read()
+        doc_id = process_document_for_user(file.filename, content, int(user_id), db, agent_id)
+        
+        logger.info(f"Document uploaded for user {user_id}, agent {agent_id}: {file.filename}")
+        event_tracker.track_document_upload(int(user_id), file.filename, len(content))
+        
+        return {"filename": file.filename, "document_id": doc_id, "agent_id": agent_id, "status": "uploaded"}
     
     except HTTPException:
         raise
@@ -320,24 +424,48 @@ async def test_openai():
 @app.get("/user/documents")
 async def get_user_documents(
     user_id: str = Depends(verify_token),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    agent_id: int = None
 ):
-    """Get user's documents"""
+    """Get user's documents, optionally filtered by agent"""
     try:
-        documents = db.query(Document).filter(Document.user_id == int(user_id)).all()
-        return {
-            "documents": [
-                {
+        logger.info(f"Fetching documents for user {user_id}, agent {agent_id}")
+        
+        # Build query
+        query = db.query(Document).filter(Document.user_id == int(user_id))
+        
+        # If agent_id is specified, filter by it
+        if agent_id is not None:
+            query = query.filter(Document.agent_id == agent_id)
+        
+        documents = query.all()
+        logger.info(f"Found {len(documents)} documents for user {user_id}, agent {agent_id}")
+        
+        result = []
+        for doc in documents:
+            try:
+                doc_data = {
                     "id": doc.id,
                     "filename": doc.filename,
                     "created_at": doc.created_at.isoformat()
                 }
-                for doc in documents
-            ]
-        }
+                # Safely try to add agent_id if it exists
+                if hasattr(doc, 'agent_id'):
+                    doc_data["agent_id"] = doc.agent_id
+                result.append(doc_data)
+            except Exception as doc_error:
+                logger.error(f"Error processing document {doc.id}: {doc_error}")
+                # Skip problematic documents but continue
+                continue
+                
+        return {"documents": result}
+        
     except Exception as e:
         logger.error(f"Error fetching documents: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Error type: {type(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.delete("/documents/{document_id}")
 async def delete_document(
@@ -369,6 +497,97 @@ async def delete_document(
         raise
     except Exception as e:
         logger.error(f"Error deleting document: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# Endpoints pour les agents
+@app.get("/agents")
+async def get_agents(
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Get user's agents"""
+    try:
+        agents = db.query(Agent).filter(Agent.user_id == int(user_id)).all()
+        return {"agents": agents}
+    except Exception as e:
+        logger.error(f"Error getting agents: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/agents")
+async def create_agent(
+    agent: AgentCreate,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Create a new agent"""
+    try:
+        valid_types = ['sales', 'marketing', 'hr', 'purchase']
+        if agent.type not in valid_types:
+            raise HTTPException(status_code=400, detail=f"Invalid agent type. Must be one of: {valid_types}")
+        
+        db_agent = Agent(
+            name=agent.name,
+            type=agent.type,
+            user_id=int(user_id)
+        )
+        db.add(db_agent)
+        db.commit()
+        db.refresh(db_agent)
+        
+        return {"agent": db_agent}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating agent: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.delete("/agents/{agent_id}")
+async def delete_agent(
+    agent_id: int,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Delete an agent"""
+    try:
+        agent = db.query(Agent).filter(
+            Agent.id == agent_id,
+            Agent.user_id == int(user_id)
+        ).first()
+        
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        db.delete(agent)
+        db.commit()
+        
+        return {"message": "Agent deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting agent: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/agents/{agent_id}")
+async def get_agent(
+    agent_id: int,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Get a specific agent"""
+    try:
+        agent = db.query(Agent).filter(
+            Agent.id == agent_id,
+            Agent.user_id == int(user_id)
+        ).first()
+        
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        return {"agent": agent}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting agent: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 if __name__ == "__main__":
