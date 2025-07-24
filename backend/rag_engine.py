@@ -1,15 +1,114 @@
 # Contient la logique RAG améliorée
 import json
 import logging
-from typing import List
+import time
+from datetime import datetime
+from typing import List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from openai_client import get_embedding, get_chat_response, get_embedding_fast
 from database import Document, DocumentChunk, User
 from file_loader import load_text_from_pdf, chunk_text
+from file_generator import FileGenerator
 
 logger = logging.getLogger(__name__)
 
-def get_answer(question: str, user_id: int, db: Session, selected_doc_ids: List[int] = None) -> str:
+# Cache simple pour les réponses récentes
+_answer_cache = {}
+
+def get_answer_with_files(question: str, user_id: int, db: Session, selected_doc_ids: List[int] = None, agent_type: str = None) -> Dict[str, Any]:
+    """Get answer using RAG with file generation capabilities"""
+    try:
+        # Créer une clé de cache
+        cache_key = f"{user_id}_{hash(question)}_{hash(str(selected_doc_ids))}_{agent_type}"
+        
+        # Vérifier le cache (garde en cache pendant 5 minutes)
+        if cache_key in _answer_cache:
+            cached_time, cached_result = _answer_cache[cache_key]
+            if datetime.now().timestamp() - cached_time < 300:  # 5 minutes
+                logger.info("Returning cached answer")
+                return cached_result
+        
+        # Get the regular answer first
+        answer = get_answer(question, user_id, db, selected_doc_ids, agent_type)
+        
+        # Initialize file generator
+        file_gen = FileGenerator()
+        
+        # Detect if user wants file generation
+        generation_info = file_gen.detect_generation_request(question, answer)
+        
+        # If no table detected but user asked for structured data, create sample data
+        if (generation_info['generate_csv'] or generation_info['generate_pdf']) and not generation_info['table_data']:
+            sample_data = file_gen.create_sample_data(agent_type or 'sales')
+            generation_info['table_data'] = sample_data
+            generation_info['has_table'] = True
+            
+        # Format answer with table if needed
+        if generation_info['has_table'] and generation_info['table_data']:
+            generation_info['formatted_answer'] = file_gen._format_answer_with_table(answer, generation_info['table_data'])
+        else:
+            generation_info['formatted_answer'] = answer
+            
+        result = {
+            'answer': generation_info['formatted_answer'],
+            'generation_info': generation_info
+        }
+        
+        # Mettre en cache le résultat
+        _answer_cache[cache_key] = (datetime.now().timestamp(), result)
+        
+        # Nettoyer le cache (garder seulement les 10 dernières entrées)
+        if len(_answer_cache) > 10:
+            oldest_key = min(_answer_cache.keys(), key=lambda k: _answer_cache[k][0])
+            del _answer_cache[oldest_key]
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting answer with files: {e}")
+        raise Exception(f"Erreur lors du traitement de votre question : {str(e)}")
+
+def get_agent_system_prompt(agent_type: str = None) -> str:
+    """Get system prompt based on agent type"""
+    agent_prompts = {
+        'sales': """Vous êtes un assistant IA spécialisé en VENTES. Votre rôle est d'analyser les documents du point de vue commercial et d'aider avec les stratégies de vente, la prospection, et la conversion client.""",
+        'marketing': """Vous êtes un assistant IA spécialisé en MARKETING. Votre rôle est d'analyser les documents du point de vue marketing et d'aider avec les campagnes, la communication, et la stratégie de marque.""",
+        'hr': """Vous êtes un assistant IA spécialisé en RESSOURCES HUMAINES. Votre rôle est d'analyser les documents du point de vue RH et d'aider avec le recrutement, la gestion des talents, et les politiques d'entreprise.""",
+        'purchase': """Vous êtes un assistant IA spécialisé en ACHATS. Votre rôle est d'analyser les documents du point de vue achats et d'aider avec la négociation fournisseurs, l'approvisionnement, et l'optimisation des coûts."""
+    }
+    
+    if agent_type and agent_type in agent_prompts:
+        return agent_prompts[agent_type]
+    else:
+        return "Vous êtes un assistant IA professionnel."
+
+def get_direct_gpt_response(question: str, agent_type: str = None) -> str:
+    """Get direct response from GPT without RAG when no documents are available"""
+    try:
+        # Get agent-specific system prompt
+        agent_prompt = get_agent_system_prompt(agent_type)
+        
+        # Create prompt for direct GPT call
+        prompt = f"""{agent_prompt}
+
+L'utilisateur n'a pas encore uploadé de documents. Répondez à sa question en utilisant vos connaissances générales, tout en gardant votre spécialisation à l'esprit.
+
+Question: {question}
+
+Réponse:"""
+        
+        # Get AI response
+        logger.info("Getting direct response from OpenAI (no documents)")
+        response = get_chat_response(prompt)
+        logger.info("Successfully got direct response from OpenAI")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error getting direct GPT response: {e}")
+        raise Exception(f"Erreur lors du traitement de votre question : {str(e)}")
+
+def get_answer(question: str, user_id: int, db: Session, selected_doc_ids: List[int] = None, agent_type: str = None) -> str:
     """Get answer using RAG for specific user with OpenAI - always using embeddings"""
     try:
         # Get user's documents (filter by selected documents if provided)
@@ -27,7 +126,9 @@ def get_answer(question: str, user_id: int, db: Session, selected_doc_ids: List[
             if selected_doc_ids:
                 return "Aucun des documents sélectionnés n'a été trouvé. Veuillez vérifier votre sélection."
             else:
-                return "Veuillez d'abord télécharger des documents pour que je puisse vous aider."
+                # No documents available - use direct GPT call
+                logger.info("No documents found, using direct GPT call")
+                return get_direct_gpt_response(question, agent_type)
         
         # Always get question embedding with retry
         logger.info(f"Getting embedding for question: {question}")
@@ -86,8 +187,11 @@ Question de l'utilisateur: {question}
 
 Réponse:"""
         else:
+            # Get agent-specific system prompt
+            agent_prompt = get_agent_system_prompt(agent_type)
+            
             # Standard RAG response with document attribution
-            prompt = f"""Vous êtes un assistant IA professionnel. Utilisez les extraits de documents ci-dessous pour répondre à la question de l'utilisateur.
+            prompt = f"""{agent_prompt} Utilisez les extraits de documents ci-dessous pour répondre à la question de l'utilisateur.
 
 CONTEXTE DES DOCUMENTS ({len(documents_info)} document(s) sélectionné(s)):
 {enhanced_context}

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
-import { Upload, Send, LogOut, FileText, MessageCircle, Plus, Trash2, Check, ArrowLeft, Bot } from "lucide-react";
+import { Upload, Send, LogOut, FileText, MessageCircle, Plus, Trash2, Check, ArrowLeft, Bot, Download } from "lucide-react";
 
 // Auto-detect API URL based on environment
 const getApiUrl = () => {
@@ -31,6 +31,10 @@ export default function Dashboard() {
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [currentAgent, setCurrentAgent] = useState(null);
   const [agentId, setAgentId] = useState(null);
+  const [canGenerateCSV, setCanGenerateCSV] = useState(false);
+  const [canGeneratePDF, setCanGeneratePDF] = useState(false);
+  const [hasTable, setHasTable] = useState(false);
+  const [generatingFile, setGeneratingFile] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -116,7 +120,8 @@ export default function Dashboard() {
         `${API_URL}/ask`,
         { 
           question,
-          selected_documents: Array.from(selectedDocuments)
+          selected_documents: Array.from(selectedDocuments),
+          agent_type: currentAgent?.type || 'sales'
         },
         {
           headers: {
@@ -125,13 +130,116 @@ export default function Dashboard() {
           },
         }
       );
+      
       setAnswer(response.data.answer);
+      setCanGenerateCSV(response.data.can_generate_csv || false);
+      setCanGeneratePDF(response.data.can_generate_pdf || false);
+      setHasTable(response.data.has_table || false);
+      
       toast.success("Réponse générée !");
     } catch (error) {
       console.error("Error:", error);
       toast.error("Erreur lors de la génération de la réponse");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateCSV = async () => {
+    if (!canGenerateCSV) {
+      toast.error("Aucun données structurées à exporter");
+      return;
+    }
+    
+    setGeneratingFile(true);
+    try {
+      const response = await axios.post(
+        `${API_URL}/generate-csv`,
+        { 
+          question,
+          selected_documents: Array.from(selectedDocuments),
+          agent_type: currentAgent?.type || 'sales'
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          responseType: 'blob'
+        }
+      );
+      
+      // Créer et télécharger le fichier
+      const blob = new Blob([response.data], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
+      const agentType = currentAgent?.type || 'general';
+      a.download = `rapport_${agentType}_${timestamp}.csv`;
+      
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast.success("Fichier CSV généré et téléchargé !");
+    } catch (error) {
+      console.error("Error generating CSV:", error);
+      toast.error("Erreur lors de la génération du CSV");
+    } finally {
+      setGeneratingFile(false);
+    }
+  };
+
+  const generatePDF = async () => {
+    if (!canGeneratePDF && !hasTable) {
+      toast.error("Aucun contenu à exporter en PDF");
+      return;
+    }
+    
+    setGeneratingFile(true);
+    try {
+      const response = await axios.post(
+        `${API_URL}/generate-pdf`,
+        { 
+          question,
+          selected_documents: Array.from(selectedDocuments),
+          agent_type: currentAgent?.type || 'sales'
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          responseType: 'blob'
+        }
+      );
+      
+      // Créer et télécharger le fichier
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
+      const agentType = currentAgent?.type || 'general';
+      a.download = `rapport_${agentType}_${timestamp}.pdf`;
+      
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast.success("Fichier PDF généré et téléchargé !");
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      toast.error("Erreur lors de la génération du PDF");
+    } finally {
+      setGeneratingFile(false);
     }
   };
 
@@ -252,14 +360,14 @@ export default function Dashboard() {
             <div className="mb-4 p-3 bg-gray-50 rounded-lg">
               <div className="flex items-center">
                 <Bot className={`w-5 h-5 mr-2 ${
-                  currentAgent.agent_type === 'sales' ? 'text-green-600' :
-                  currentAgent.agent_type === 'marketing' ? 'text-purple-600' :
-                  currentAgent.agent_type === 'hr' ? 'text-blue-600' :
+                  currentAgent.type === 'sales' ? 'text-green-600' :
+                  currentAgent.type === 'marketing' ? 'text-purple-600' :
+                  currentAgent.type === 'hr' ? 'text-blue-600' :
                   'text-orange-600'
                 }`} />
                 <div>
-                  <p className="font-medium text-gray-800">{currentAgent.name}</p>
-                  <p className="text-sm text-gray-600 capitalize">{currentAgent.agent_type}</p>
+                  <p className="font-medium text-gray-800">{currentAgent.name} ({currentAgent.type})</p>
+                  <p className="text-sm text-gray-600 capitalize">{currentAgent.type}</p>
                 </div>
               </div>
             </div>
@@ -352,14 +460,14 @@ export default function Dashboard() {
           {currentAgent && (
             <div className="flex items-center">
               <Bot className={`w-6 h-6 mr-3 ${
-                currentAgent.agent_type === 'sales' ? 'text-green-600' :
-                currentAgent.agent_type === 'marketing' ? 'text-purple-600' :
-                currentAgent.agent_type === 'hr' ? 'text-blue-600' :
+                currentAgent.type === 'sales' ? 'text-green-600' :
+                currentAgent.type === 'marketing' ? 'text-purple-600' :
+                currentAgent.type === 'hr' ? 'text-blue-600' :
                 'text-orange-600'
               }`} />
               <div>
-                <h1 className="text-xl font-bold text-gray-800">{currentAgent.name}</h1>
-                <p className="text-sm text-gray-600 capitalize">Agent {currentAgent.agent_type}</p>
+                <h1 className="text-xl font-bold text-gray-800">{currentAgent.name} ({currentAgent.type})</h1>
+                <p className="text-sm text-gray-600 capitalize">Agent {currentAgent.type}</p>
               </div>
             </div>
           )}
@@ -395,10 +503,40 @@ export default function Dashboard() {
           ) : answer ? (
             <div className="bg-white rounded-lg p-6 shadow-sm">
               <div className="prose max-w-none">
-                <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">
+                <pre className="text-gray-800 leading-relaxed whitespace-pre-wrap font-sans text-sm overflow-x-auto">
                   {answer}
-                </p>
+                </pre>
               </div>
+              
+              {/* File Generation Buttons */}
+              {(canGenerateCSV || canGeneratePDF || hasTable) && (
+                <div className="mt-6 pt-4 border-t border-gray-200">
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Exporter la réponse :</h4>
+                  <div className="flex space-x-3">
+                    {canGenerateCSV && (
+                      <button
+                        onClick={generateCSV}
+                        disabled={generatingFile}
+                        className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{generatingFile ? 'Génération...' : 'Télécharger CSV'}</span>
+                      </button>
+                    )}
+                    
+                    {(canGeneratePDF || hasTable) && (
+                      <button
+                        onClick={generatePDF}
+                        disabled={generatingFile}
+                        className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>{generatingFile ? 'Génération...' : 'Télécharger PDF'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             /* Welcome Message */

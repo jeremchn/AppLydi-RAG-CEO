@@ -13,3 +13,6 @@ google-cloud-secret-manager
 google-cloud-logging
 google-cloud-monitoring
 requests
+reportlab
+pandas
+tabulate
