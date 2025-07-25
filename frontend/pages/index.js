@@ -31,10 +31,7 @@ export default function Dashboard() {
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [currentAgent, setCurrentAgent] = useState(null);
   const [agentId, setAgentId] = useState(null);
-  const [canGenerateCSV, setCanGenerateCSV] = useState(false);
-  const [canGeneratePDF, setCanGeneratePDF] = useState(false);
-  const [hasTable, setHasTable] = useState(false);
-  const [generatingFile, setGeneratingFile] = useState(false);
+  // Suppression des états liés à l'export CSV/PDF/tableau
   const [darkMode, setDarkMode] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const router = useRouter();
@@ -193,9 +190,7 @@ export default function Dashboard() {
       );
       
       setAnswer(response.data.answer);
-      setCanGenerateCSV(response.data.can_generate_csv || false);
-      setCanGeneratePDF(response.data.can_generate_pdf || false);
-      setHasTable(response.data.has_table || false);
+      // Suppression de la gestion des capacités d'export
       
       showSuccessToast("Réponse générée avec succès !");
     } catch (error) {
@@ -206,103 +201,7 @@ export default function Dashboard() {
     }
   };
 
-  const generateCSV = async () => {
-    if (!canGenerateCSV) {
-      showErrorToast("Aucune données structurées à exporter");
-      return;
-    }
-    
-    setGeneratingFile(true);
-    try {
-      const response = await axios.post(
-        `${API_URL}/generate-csv`,
-        { 
-          question,
-          selected_documents: Array.from(selectedDocuments),
-          agent_type: currentAgent?.type || 'sales'
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          responseType: 'blob'
-        }
-      );
-      
-      // Créer et télécharger le fichier
-      const blob = new Blob([response.data], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
-      const agentType = currentAgent?.type || 'general';
-      a.download = `rapport_${agentType}_${timestamp}.csv`;
-      
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-      showSuccessToast("Fichier CSV généré et téléchargé !");
-    } catch (error) {
-      console.error("Error generating CSV:", error);
-      showErrorToast("Erreur lors de la génération du CSV");
-    } finally {
-      setGeneratingFile(false);
-    }
-  };
-
-  const generatePDF = async () => {
-    if (!canGeneratePDF && !hasTable) {
-      toast.error("Aucun contenu à exporter en PDF");
-      return;
-    }
-    
-    setGeneratingFile(true);
-    try {
-      const response = await axios.post(
-        `${API_URL}/generate-pdf`,
-        { 
-          question,
-          selected_documents: Array.from(selectedDocuments),
-          agent_type: currentAgent?.type || 'sales'
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          responseType: 'blob'
-        }
-      );
-      
-      // Créer et télécharger le fichier
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      
-      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '');
-      const agentType = currentAgent?.type || 'general';
-      a.download = `rapport_${agentType}_${timestamp}.pdf`;
-      
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-      toast.success("Fichier PDF généré et téléchargé !");
-    } catch (error) {
-      console.error("Error generating PDF:", error);
-      toast.error("Erreur lors de la génération du PDF");
-    } finally {
-      setGeneratingFile(false);
-    }
-  };
+  // Suppression des fonctions d'export CSV/PDF
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -672,41 +571,7 @@ export default function Dashboard() {
                 </pre>
               </div>
               
-              {/* File Generation Buttons */}
-              {(canGenerateCSV || canGeneratePDF || hasTable) && (
-                <div className={`mt-6 pt-4 border-t transition-colors ${
-                  darkMode ? 'border-gray-600' : 'border-gray-200'
-                }`}>
-                  <h4 className={`text-sm font-medium mb-3 ${
-                    darkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>
-                    Exporter la réponse :
-                  </h4>
-                  <div className="flex space-x-3">
-                    {canGenerateCSV && (
-                      <button
-                        onClick={generateCSV}
-                        disabled={generatingFile}
-                        className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>{generatingFile ? 'Génération...' : 'Télécharger CSV'}</span>
-                      </button>
-                    )}
-                    
-                    {(canGeneratePDF || hasTable) && (
-                      <button
-                        onClick={generatePDF}
-                        disabled={generatingFile}
-                        className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>{generatingFile ? 'Génération...' : 'Télécharger PDF'}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
+              {/* Suppression des boutons d'export CSV/PDF */}
             </div>
           ) : (
             /* Welcome Message */

@@ -191,8 +191,8 @@ async def ask_question(
         logger.info(f"Processing question from user {user_id}: {request.question}")
         logger.info(f"Selected documents: {request.selected_documents}")
         
-        # Get answer with file generation info
-        result = get_answer_with_files(
+        # Get only the answer (plus simple)
+        answer = get_answer(
             request.question, 
             int(user_id), 
             db, 
@@ -204,17 +204,9 @@ async def ask_question(
         logger.info(f"Question answered for user {user_id} in {response_time:.2f}s")
         event_tracker.track_question_asked(int(user_id), request.question, response_time)
         
-        # Return answer with generation capabilities info
-        return {
-            "answer": result['answer'],
-            "can_generate_csv": result['generation_info']['generate_csv'],
-            "can_generate_pdf": result['generation_info']['generate_pdf'],
-            "has_table": result['generation_info']['has_table']
-        }
-    
+        return {"answer": answer}
     except Exception as e:
         logger.error(f"Error answering question for user {user_id}: {e}")
-        # Return more specific error message to help with debugging
         return {"answer": f"Désolé, une erreur s'est produite lors du traitement de votre question. Détails: {str(e)}"}
 
 @app.post("/upload")
@@ -599,93 +591,7 @@ async def get_agent(
         logger.error(f"Error getting agent: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# File Generation Endpoints
-@app.post("/generate-csv")
-async def generate_csv(
-    request: QuestionRequest,
-    user_id: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Generate CSV file based on question context"""
-    try:
-        # Get answer with file generation info
-        result = get_answer_with_files(
-            request.question, 
-            int(user_id), 
-            db, 
-            selected_doc_ids=request.selected_documents,
-            agent_type=request.agent_type
-        )
-        
-        if not result['generation_info']['table_data']:
-            raise HTTPException(status_code=400, detail="Aucune donnée structurée trouvée pour générer un CSV")
-        
-        # Generate CSV
-        file_gen = FileGenerator()
-        csv_buffer = file_gen.generate_csv(result['generation_info']['table_data'])
-        
-        # Create filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        agent_type = request.agent_type or 'general'
-        filename = f"rapport_{agent_type}_{timestamp}.csv"
-        
-        return StreamingResponse(
-            io.BytesIO(csv_buffer.read()),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
-    except Exception as e:
-        logger.error(f"Error generating CSV: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/generate-pdf")
-async def generate_pdf(
-    request: QuestionRequest,
-    user_id: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    """Generate PDF file based on question context"""
-    try:
-        # Get answer with file generation info
-        result = get_answer_with_files(
-            request.question, 
-            int(user_id), 
-            db, 
-            selected_doc_ids=request.selected_documents,
-            agent_type=request.agent_type
-        )
-        
-        # Generate PDF
-        file_gen = FileGenerator()
-        agent_type_label = {
-            'sales': 'Commercial',
-            'marketing': 'Marketing', 
-            'hr': 'Ressources Humaines',
-            'purchase': 'Achats'
-        }.get(request.agent_type, 'Général')
-        
-        title = f"Rapport {agent_type_label}"
-        pdf_buffer = file_gen.generate_pdf(
-            title=title,
-            content=result['answer'], 
-            table_data=result['generation_info']['table_data']
-        )
-        
-        # Create filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        agent_type = request.agent_type or 'general' 
-        filename = f"rapport_{agent_type}_{timestamp}.pdf"
-        
-        return StreamingResponse(
-            io.BytesIO(pdf_buffer.read()),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
-    except Exception as e:
-        logger.error(f"Error generating PDF: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+## Suppression des endpoints de génération de fichiers CSV et PDF
 
 if __name__ == "__main__":
     import uvicorn
